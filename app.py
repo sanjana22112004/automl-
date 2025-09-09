@@ -1,60 +1,27 @@
 import streamlit as st
 import pandas as pd
 import os
-from datasets_search import SAMPLE_REGISTRY, load_sample, search_kaggle_and_download, requires_kaggle
 from preprocessing import detect_task_and_preprocess
 from models import train_and_select_model
-from image_models import run_image_pipeline, is_image_hf_image_dataset
 from utils import plot_corr_matrix, plot_conf_mat, plot_roc_binary, plot_feature_importance
 
 st.set_page_config(page_title="AutoML — Demo (Tabular + Image)", layout="wide")
 st.title("AutoML — Demo (Tabular + Image)")
 
 st.sidebar.header("Dataset")
-choice = st.sidebar.radio("Choose how to provide dataset", ["Pick a sample dataset", "Upload CSV", "Search Kaggle"])
+st.sidebar.write("Upload a CSV file to begin.")
 
 df = None
-selected_sample = None
-
-if choice == "Pick a sample dataset":
-    # show suggestions (autocomplete-like)
-    sample_list = [f'{s["id"]}: {s["title"]} — {s["short"]}' for s in SAMPLE_REGISTRY]
-    selected = st.sidebar.selectbox("Sample datasets (click to choose)", sample_list)
-    idx = sample_list.index(selected)
-    selected_sample = SAMPLE_REGISTRY[idx]
-    st.sidebar.write("Description:", selected_sample["short"])
-    if st.sidebar.button("Load sample dataset"):
-        df = load_sample(selected_sample["id"])
-        st.success(f"Loaded sample: {selected_sample['title']}")
-
-elif choice == "Upload CSV":
-    uploaded = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
-    if uploaded:
+uploaded = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
+if uploaded is not None:
+    try:
         df = pd.read_csv(uploaded)
         st.success("Uploaded CSV loaded")
+    except Exception as e:
+        st.error(f"Failed to read CSV: {e}")
 
-else:  # Kaggle search
-    st.sidebar.markdown("To search Kaggle, upload your `kaggle.json` (API token) first")
-    kaggle_file = st.sidebar.file_uploader("Upload kaggle.json (optional)", type=["json"])
-    query = st.sidebar.text_input("Search Kaggle (type keywords)")
-    if st.sidebar.button("Search Kaggle"):
-        if not kaggle_file:
-            st.sidebar.warning("Please upload kaggle.json to use Kaggle search/download")
-        else:
-            try:
-                credentials = json.load(kaggle_file)
-                st.sidebar.success("kaggle.json uploaded (will be used for this session)")
-                results = search_kaggle_and_download(query, credentials)
-                if results and isinstance(results, dict) and results.get("local_csv"):
-                    df = pd.read_csv(results["local_csv"])
-                    st.success(f"Downloaded Kaggle dataset: {results.get('title','unknown')}")
-                else:
-                    st.sidebar.info("No CSV found in the downloaded Kaggle dataset or download failed.")
-            except Exception as e:
-                st.sidebar.error(f"Kaggle error: {e}")
-
-# If dataset loaded and it's tabular:
-if df is not None and not is_image_hf_image_dataset(df if isinstance(df, str) else None):
+# If dataset loaded:
+if df is not None:
     st.subheader("Dataset preview")
     st.dataframe(df.head(50))
     st.write(f"Shape: {df.shape[0]} rows × {df.shape[1]} cols")
