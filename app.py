@@ -44,7 +44,7 @@ if df is not None:
     
 
     # Detect task and preprocess, suggest target
-    task_type, X_train, X_test, y_train, y_test, suggested_target, feature_names, cleaned_df = detect_task_and_preprocess(df)
+    task_type, X_train, X_test, y_train, y_test, suggested_target, feature_names, cleaned_df, preprocessor, num_cols, cat_cols = detect_task_and_preprocess(df)
     st.info(f"Suggested target column: `{suggested_target}` (please confirm below)")
     # Show detected problem type and candidate algorithms clearly on screen
     if task_type == "classification":
@@ -53,47 +53,52 @@ if df is not None:
         st.success("Detected task: Regression — candidate algorithms: LinearRegression, RandomForestRegressor")
     target_confirm = st.text_input("Confirm target column (type exact column name):", value=suggested_target)
 
-    if st.button("Run tabular AutoML"):
+    # Auto-run pipeline without button
+    try:
+        task_type, X_train, X_test, y_train, y_test, _, feature_names, cleaned_df, preprocessor, num_cols, cat_cols = detect_task_and_preprocess(df, target_confirm)
+        result = train_and_select_model(task_type, X_train, X_test, y_train, y_test)
+        st.subheader(f"Selected algorithm: {result['best_model_name']}")
+        st.success(f"{result['metric_name']}: {result['score']:.4f}")
+        st.caption("Chosen because it achieved the best validation score among candidates.")
+        st.write(f"Selected model class: `{type(result['model']).__name__}`")
+
+        # Show all model scores inline for quick comparison
         try:
-            task_type, X_train, X_test, y_train, y_test, _, feature_names, cleaned_df = detect_task_and_preprocess(df, target_confirm)
-            result = train_and_select_model(task_type, X_train, X_test, y_train, y_test)
-            st.subheader(f"Selected algorithm: {result['best_model_name']}")
-            st.success(f"{result['metric_name']}: {result['score']:.4f}")
-            st.caption("Chosen because it achieved the best validation score among candidates.")
-            st.write(f"Selected model class: `{type(result['model']).__name__}`")
+            scores_df = pd.DataFrame(result["results"]).T
+            st.caption("Model comparison")
+            st.dataframe(scores_df)
+        except Exception:
+            st.write(result["results"])
 
-            # Show all model scores inline for quick comparison
-            try:
-                scores_df = pd.DataFrame(result["results"]).T
-                st.caption("Model comparison")
-                st.dataframe(scores_df)
-            except Exception:
-                st.write(result["results"])
-
-            # Keep hyperparameters in an expander
-            with st.expander("Model hyperparameters"):
+        # Visuals / metrics
+        if task_type == "classification":
+            st.caption("Confusion matrix")
+            st.pyplot(plot_conf_mat(y_test, result["y_pred"]))
+            if len(pd.Series(y_test).unique()) == 2:
+                st.caption("ROC curve")
+                classes = None
                 try:
-                    st.json(result["model"].get_params())
+                    classes = result.get("model").classes_ if hasattr(result.get("model"), "classes_") else None
                 except Exception:
-                    st.write("Parameters unavailable for this model.")
-
-            if task_type == "classification":
-                st.caption("Confusion matrix")
-                st.pyplot(plot_conf_mat(y_test, result["y_pred"]))
-                # ROC if binary
-                if len(pd.Series(y_test).unique()) == 2:
-                    st.caption("ROC curve")
                     classes = None
-                    try:
-                        classes = result.get("model").classes_ if hasattr(result.get("model"), "classes_") else None
-                    except Exception:
-                        classes = None
-                    st.pyplot(plot_roc_binary(y_test, result.get("y_proba"), classes=classes))
-            else:
-                st.caption("Feature importances (if model supports it)")
-                st.pyplot(plot_feature_importance(result.get("model"), feature_names))
+                st.pyplot(plot_roc_binary(y_test, result.get("y_proba"), classes=classes))
+        else:
+            st.caption("Feature importances (if model supports it)")
+            st.pyplot(plot_feature_importance(result.get("model"), feature_names))
+
+        # Predictions on full dataset for download
+        try:
+            X_full = df.drop(columns=[target_confirm])
+            X_full_t = preprocessor.transform(X_full)
+            preds = result["model"].predict(X_full_t)
+            out_df = df.copy()
+            out_df[f"prediction_{target_confirm}"] = preds
+            csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download predictions CSV", data=csv_bytes, file_name="predictions.csv", mime="text/csv")
         except Exception as e:
-            st.error(f"Training failed: {e}")
+            st.warning(f"Could not generate predictions for download: {e}")
+    except Exception as e:
+        st.error(f"Training failed: {e}")
 
 # If an HF image dataset name string was returned (special flow)
 # Note: in this simplified demo, image pipeline is triggered directly via sample selection for MNIST

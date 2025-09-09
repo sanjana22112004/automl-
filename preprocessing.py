@@ -71,4 +71,4 @@ def detect_task_and_preprocess(df: pd.DataFrame, target=None, test_size=0.2, ran
         except Exception:
             pass
 
-    return task_type, X_train_t, X_test_t, y_train.values if hasattr(y_train,"values") else y_train, y_test.values if hasattr(y_test,"values") else y_test, target, feature_names, df
+    return task_type, X_train_t, X_test_t, y_train.values if hasattr(y_train,"values") else y_train, y_test.values if hasattr(y_test,"values") else y_test, target, feature_names, df, preprocessor, num_cols, cat_cols
