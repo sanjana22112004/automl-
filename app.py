@@ -22,28 +22,60 @@ if uploaded is not None:
 
 # If dataset loaded:
 if df is not None:
-    st.subheader("Dataset preview")
-    st.dataframe(df.head(50))
-    st.write(f"Shape: {df.shape[0]} rows × {df.shape[1]} cols")
+    # High-level dataset KPIs
+    c1, c2 = st.columns(2)
+    c1.metric("Rows", f"{df.shape[0]:,}")
+    c2.metric("Columns", f"{df.shape[1]:,}")
 
-    # Correlation (raw numeric)
-    st.caption("Correlation (numeric features)")
-    try:
-        fig_corr = plot_corr_matrix(df)
-        st.pyplot(fig_corr)
-    except Exception as e:
-        st.write("Correlation plot failed:", e)
+    # Tabs for a cleaner layout
+    tab_preview, tab_corr = st.tabs(["Preview", "Correlation"])
+    with tab_preview:
+        st.subheader("Dataset preview")
+        st.dataframe(df.head(50))
+        st.caption("Showing first 50 rows")
+    with tab_corr:
+        st.caption("Correlation (numeric features)")
+        try:
+            fig_corr = plot_corr_matrix(df)
+            st.pyplot(fig_corr)
+        except Exception as e:
+            st.write("Correlation plot failed:", e)
+
+    
 
     # Detect task and preprocess, suggest target
     task_type, X_train, X_test, y_train, y_test, suggested_target, feature_names, cleaned_df = detect_task_and_preprocess(df)
     st.info(f"Suggested target column: `{suggested_target}` (please confirm below)")
+    # Show detected problem type and candidate algorithms clearly on screen
+    if task_type == "classification":
+        st.success("Detected task: Classification — candidate algorithms: LogisticRegression, RandomForestClassifier")
+    else:
+        st.success("Detected task: Regression — candidate algorithms: LinearRegression, RandomForestRegressor")
     target_confirm = st.text_input("Confirm target column (type exact column name):", value=suggested_target)
 
     if st.button("Run tabular AutoML"):
         try:
             task_type, X_train, X_test, y_train, y_test, _, feature_names, cleaned_df = detect_task_and_preprocess(df, target_confirm)
             result = train_and_select_model(task_type, X_train, X_test, y_train, y_test)
-            st.success(f"Best model: {result['best_model_name']} — {result['metric_name']}: {result['score']:.4f}")
+            st.subheader(f"Selected algorithm: {result['best_model_name']}")
+            st.success(f"{result['metric_name']}: {result['score']:.4f}")
+            st.caption("Chosen because it achieved the best validation score among candidates.")
+            st.write(f"Selected model class: `{type(result['model']).__name__}`")
+
+            # Show all model scores inline for quick comparison
+            try:
+                scores_df = pd.DataFrame(result["results"]).T
+                st.caption("Model comparison")
+                st.dataframe(scores_df)
+            except Exception:
+                st.write(result["results"])
+
+            # Keep hyperparameters in an expander
+            with st.expander("Model hyperparameters"):
+                try:
+                    st.json(result["model"].get_params())
+                except Exception:
+                    st.write("Parameters unavailable for this model.")
 
             if task_type == "classification":
                 st.caption("Confusion matrix")

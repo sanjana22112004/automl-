@@ -40,7 +40,24 @@ def detect_task_and_preprocess(df: pd.DataFrame, target=None, test_size=0.2, ran
         ("cat", OneHotEncoder(**ohe_kwargs), cat_cols)
     ], remainder="drop")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y if task_type=="classification" else None)
+    # Prefer stratified split for classification, but fall back if it's not feasible
+    stratify_arg = y if task_type == "classification" else None
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=stratify_arg
+        )
+    except ValueError:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=None
+        )
 
     X_train_t = preprocessor.fit_transform(X_train)
     X_test_t = preprocessor.transform(X_test)
