@@ -86,13 +86,16 @@ if df is not None:
             st.caption("Feature importances (if model supports it)")
             st.pyplot(plot_feature_importance(result.get("model"), feature_names))
 
-        # Predictions on full dataset for download
+        # Predictions on full dataset for preview and optional download
         try:
             X_full = df.drop(columns=[target_confirm])
             X_full_t = preprocessor.transform(X_full)
             preds = result["model"].predict(X_full_t)
             out_df = df.copy()
             out_df[f"prediction_{target_confirm}"] = preds
+            st.subheader("Predictions preview")
+            st.dataframe(out_df.head(50))
+            st.caption("Showing first 50 rows with predictions")
             csv_bytes = out_df.to_csv(index=False).encode("utf-8")
             st.download_button("Download predictions CSV", data=csv_bytes, file_name="predictions.csv", mime="text/csv")
         except Exception as e:
