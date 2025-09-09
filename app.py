@@ -1,142 +1,95 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datasets_search import search_datasets, get_sklearn_datasets, search_openml_datasets, load_dataset
-from utils import plot_corr, plot_roc_auc, display_data_info, plot_data_distribution
-from models import train_model
-from preprocessing import preprocess
+import os
+from datasets_search import SAMPLE_REGISTRY, load_sample, search_kaggle_and_download, requires_kaggle
+from preprocessing import detect_task_and_preprocess
+from models import train_and_select_model
+from image_models import run_image_pipeline, is_image_hf_image_dataset
+from utils import plot_corr_matrix, plot_conf_mat, plot_roc_binary, plot_feature_importance
 
-st.title("🤖 ML Streamlit Demo")
-st.markdown("---")
+st.set_page_config(page_title="AutoML — Demo (Tabular + Image)", layout="wide")
+st.title("AutoML — Demo (Tabular + Image)")
 
-# Sidebar for dataset selection
-st.sidebar.title("📊 Dataset Selection")
+st.sidebar.header("Dataset")
+choice = st.sidebar.radio("Choose how to provide dataset", ["Pick a sample dataset", "Upload CSV", "Search Kaggle"])
 
-# Dataset source selection
-data_source = st.sidebar.selectbox(
-    "Choose your data source:",
-    ["Upload File", "Sklearn Datasets", "OpenML Datasets", "Kaggle Search"]
-)
+df = None
+selected_sample = None
 
-dataset = None
-data_info = None
+if choice == "Pick a sample dataset":
+    # show suggestions (autocomplete-like)
+    sample_list = [f'{s["id"]}: {s["title"]} — {s["short"]}' for s in SAMPLE_REGISTRY]
+    selected = st.sidebar.selectbox("Sample datasets (click to choose)", sample_list)
+    idx = sample_list.index(selected)
+    selected_sample = SAMPLE_REGISTRY[idx]
+    st.sidebar.write("Description:", selected_sample["short"])
+    if st.sidebar.button("Load sample dataset"):
+        df = load_sample(selected_sample["id"])
+        st.success(f"Loaded sample: {selected_sample['title']}")
 
-if data_source == "Upload File":
-    st.sidebar.subheader("📁 Upload Your Dataset")
-    uploaded_file = st.sidebar.file_uploader(
-        "Choose a CSV file",
-        type=['csv'],
-        help="Upload a CSV file with your data"
-    )
-    
-    if uploaded_file is not None:
+elif choice == "Upload CSV":
+    uploaded = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
+    if uploaded:
+        df = pd.read_csv(uploaded)
+        st.success("Uploaded CSV loaded")
+
+else:  # Kaggle search
+    st.sidebar.markdown("To search Kaggle, upload your `kaggle.json` (API token) first")
+    kaggle_file = st.sidebar.file_uploader("Upload kaggle.json (optional)", type=["json"])
+    query = st.sidebar.text_input("Search Kaggle (type keywords)")
+    if st.sidebar.button("Search Kaggle"):
+        if not kaggle_file:
+            st.sidebar.warning("Please upload kaggle.json to use Kaggle search/download")
+        else:
+            try:
+                credentials = json.load(kaggle_file)
+                st.sidebar.success("kaggle.json uploaded (will be used for this session)")
+                results = search_kaggle_and_download(query, credentials)
+                if results and isinstance(results, dict) and results.get("local_csv"):
+                    df = pd.read_csv(results["local_csv"])
+                    st.success(f"Downloaded Kaggle dataset: {results.get('title','unknown')}")
+                else:
+                    st.sidebar.info("No CSV found in the downloaded Kaggle dataset or download failed.")
+            except Exception as e:
+                st.sidebar.error(f"Kaggle error: {e}")
+
+# If dataset loaded and it's tabular:
+if df is not None and not is_image_hf_image_dataset(df if isinstance(df, str) else None):
+    st.subheader("Dataset preview")
+    st.dataframe(df.head(50))
+    st.write(f"Shape: {df.shape[0]} rows × {df.shape[1]} cols")
+
+    # Correlation (raw numeric)
+    st.caption("Correlation (numeric features)")
+    try:
+        fig_corr = plot_corr_matrix(df)
+        st.pyplot(fig_corr)
+    except Exception as e:
+        st.write("Correlation plot failed:", e)
+
+    # Detect task and preprocess, suggest target
+    task_type, X_train, X_test, y_train, y_test, suggested_target, feature_names, cleaned_df = detect_task_and_preprocess(df)
+    st.info(f"Suggested target column: `{suggested_target}` (please confirm below)")
+    target_confirm = st.text_input("Confirm target column (type exact column name):", value=suggested_target)
+
+    if st.button("Run tabular AutoML"):
         try:
-            dataset = pd.read_csv(uploaded_file)
-            data_info = {
-                'name': uploaded_file.name,
-                'source': 'uploaded',
-                'shape': dataset.shape
-            }
-            st.sidebar.success(f"✅ File uploaded successfully!")
-        except Exception as e:
-            st.sidebar.error(f"❌ Error reading file: {str(e)}")
+            task_type, X_train, X_test, y_train, y_test, _, feature_names, cleaned_df = detect_task_and_preprocess(df, target_confirm)
+            result = train_and_select_model(task_type, X_train, X_test, y_train, y_test)
+            st.success(f"Best model: {result['best_model_name']} — {result['metric_name']}: {result['score']:.4f}")
 
-elif data_source == "Sklearn Datasets":
-    st.sidebar.subheader("🔬 Sklearn Datasets")
-    sklearn_datasets = get_sklearn_datasets()
-    
-    selected_dataset = st.sidebar.selectbox(
-        "Select a dataset:",
-        list(sklearn_datasets.keys())
-    )
-    
-    if st.sidebar.button("Load Dataset"):
-        try:
-            dataset, data_info = load_dataset('sklearn', selected_dataset)
-            st.sidebar.success(f"✅ {selected_dataset} loaded successfully!")
-        except Exception as e:
-            st.sidebar.error(f"❌ Error loading dataset: {str(e)}")
-
-elif data_source == "OpenML Datasets":
-    st.sidebar.subheader("🌐 OpenML Datasets")
-    search_query = st.sidebar.text_input("Search OpenML datasets:", placeholder="e.g. iris, wine, diabetes")
-    
-    if search_query:
-        try:
-            openml_results = search_openml_datasets(search_query)
-            if openml_results:
-                selected_openml = st.sidebar.selectbox(
-                    "Select a dataset:",
-                    [f"{result['name']} (ID: {result['id']})" for result in openml_results[:10]]
-                )
-                
-                if st.sidebar.button("Load OpenML Dataset"):
-                    dataset_id = int(selected_openml.split("ID: ")[1].split(")")[0])
-                    dataset, data_info = load_dataset('openml', dataset_id)
-                    st.sidebar.success(f"✅ OpenML dataset loaded successfully!")
+            if task_type == "classification":
+                st.caption("Confusion matrix")
+                st.pyplot(plot_conf_mat(y_test, result["y_pred"]))
+                # ROC if binary
+                if len(pd.Series(y_test).unique()) == 2:
+                    st.caption("ROC curve")
+                    st.pyplot(plot_roc_binary(y_test, result.get("y_proba")))
             else:
-                st.sidebar.warning("No datasets found for your search.")
+                st.caption("Feature importances (if model supports it)")
+                st.pyplot(plot_feature_importance(result.get("model"), feature_names))
         except Exception as e:
-            st.sidebar.error(f"❌ Error searching OpenML: {str(e)}")
+            st.error(f"Training failed: {e}")
 
-elif data_source == "Kaggle Search":
-    st.sidebar.subheader("🏆 Kaggle Datasets")
-    query = st.sidebar.text_input("Search Kaggle datasets", placeholder="e.g. Titanic, Iris, MNIST")
-    if query:
-        results = search_datasets(query)
-        st.sidebar.write("Top Results:", results)
-
-# Main content area
-if dataset is not None:
-    st.header("📈 Dataset Overview")
-    
-    # Display dataset information
-    display_data_info(dataset, data_info)
-    
-    # Data preview
-    st.subheader("🔍 Data Preview")
-    st.dataframe(dataset.head(10))
-    
-    # Basic statistics
-    st.subheader("📊 Basic Statistics")
-    st.dataframe(dataset.describe())
-    
-    # Data visualization options
-    st.subheader("📊 Visualizations")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("Show Correlation Matrix"):
-            plot_corr(dataset)
-    
-    with col2:
-        if st.button("Show ROC Curve"):
-            plot_roc_auc(dataset)
-    
-    with col3:
-        if st.button("Show Data Distribution"):
-            plot_data_distribution(dataset)
-    
-    # Machine Learning section
-    st.header("🤖 Machine Learning")
-    
-    if st.button("Train Model"):
-        try:
-            # Basic preprocessing
-            processed_data = preprocess(dataset)
-            
-            # Train model (placeholder)
-            model_result = train_model(processed_data, None)
-            st.success(f"✅ {model_result}")
-        except Exception as e:
-            st.error(f"❌ Error training model: {str(e)}")
-
-else:
-    st.info("👈 Please select a dataset from the sidebar to get started!")
-    
-    # Show demo visualizations when no dataset is selected
-    st.header("🎨 Demo Visualizations")
-    st.write("Here are some sample visualizations:")
-    plot_corr()
-    plot_roc_auc()
+# If an HF image dataset name string was returned (special flow)
+# Note: in this simplified demo, image pipeline is triggered directly via sample selection for MNIST
