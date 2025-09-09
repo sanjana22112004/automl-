@@ -27,14 +27,38 @@ def plot_conf_mat(y_true, y_pred):
     fig.tight_layout()
     return fig
 
-def plot_roc_binary(y_true, y_proba):
+def plot_roc_binary(y_true, y_proba, classes=None):
+    # Ensure binary classification
+    unique_labels = np.unique(y_true)
+    if len(unique_labels) != 2:
+        fig = plt.figure(); plt.text(0.5,0.5,"ROC only for binary targets", ha="center"); return fig
     if y_proba is None:
         fig = plt.figure(); plt.text(0.5,0.5,"No predict_proba available", ha="center"); return fig
-    if y_proba.ndim==2 and y_proba.shape[1]>1:
-        y_scores = y_proba[:,1]
+
+    # Determine positive label and select probability column accordingly
+    model_classes = None
+    if classes is not None:
+        model_classes = np.array(classes)
+
+    # Choose positive label as the second class consistently
+    pos_label = unique_labels[1]
+
+    if y_proba.ndim == 2 and y_proba.shape[1] > 1:
+        if model_classes is not None and len(model_classes) == y_proba.shape[1]:
+            # Map provided classes to columns
+            try:
+                pos_idx = int(np.where(model_classes == pos_label)[0][0])
+            except Exception:
+                pos_idx = 1
+        else:
+            pos_idx = 1
+        y_scores = y_proba[:, pos_idx]
     else:
         y_scores = y_proba
-    fpr, tpr, _ = roc_curve(y_true, y_scores)
+
+    # Binarize y_true against pos_label
+    y_true_bin = (y_true == pos_label).astype(int)
+    fpr, tpr, _ = roc_curve(y_true_bin, y_scores, pos_label=1)
     roc_auc = auc(fpr, tpr)
     fig, ax = plt.subplots(figsize=(5,4))
     ax.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}")

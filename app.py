@@ -83,7 +83,12 @@ if df is not None:
                 # ROC if binary
                 if len(pd.Series(y_test).unique()) == 2:
                     st.caption("ROC curve")
-                    st.pyplot(plot_roc_binary(y_test, result.get("y_proba")))
+                    classes = None
+                    try:
+                        classes = result.get("model").classes_ if hasattr(result.get("model"), "classes_") else None
+                    except Exception:
+                        classes = None
+                    st.pyplot(plot_roc_binary(y_test, result.get("y_proba"), classes=classes))
             else:
                 st.caption("Feature importances (if model supports it)")
                 st.pyplot(plot_feature_importance(result.get("model"), feature_names))
